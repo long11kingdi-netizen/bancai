@@ -118,8 +118,6 @@
   @media (max-width:800px){.detail-review{grid-template-columns:1fr;}}
   .detail-img{border-radius:var(--radius-lg);overflow:hidden;background:var(--surface);border:1px solid var(--line);}
   .detail-img img{width:100%;display:block;}
-  .detail-video{margin-top:16px;border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--line);aspect-ratio:16/9;}
-  .detail-video iframe{width:100%;height:100%;border:0;}
   .detail-title{font-size:34px;margin:0 0 12px;font-weight:600;}
   .detail-actors{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:26px;}
   .big-score{display:flex;align-items:baseline;gap:10px;margin-bottom:28px;}
@@ -192,8 +190,9 @@ const DEFAULT_FIREBASE_CONFIG = {
 
 let firebaseApp = null, db = null;
 let actors = [];      // {id,name,avatarUrl}
-let reviews = [];      // {id,title,imageUrl,videoUrl,actorIds[],scores{},createdAt}
+let reviews = [];      // {id,title,imageUrl,actorIds[],scores{},createdAt}
 let dataReady = false;
+let loadError = null;
 
 let state = {
   search: "",
@@ -214,6 +213,13 @@ function resetFilters(){
   state.filterActorIds = [];
   state.overallMin = 0;
   CRITERIA.forEach(c=> state.critMin[c] = 0 );
+}
+
+function friendlyError(err){
+  if(err && err.code === 'permission-denied'){
+    return 'Không có quyền đọc/ghi Firestore.\n\nVào Firebase Console → Firestore Database → Rules, và thêm rule cho 2 collection app này dùng:\n\nmatch /'+COLL_ACTORS+'/{doc} { allow read, write: if true; }\nmatch /'+COLL_REVIEWS+'/{doc} { allow read, write: if true; }\n\n(hoặc bật test mode). Sau khi Publish rule, tải lại trang.';
+  }
+  return 'Lỗi: '+(err && err.message ? err.message : err);
 }
 
 /* ============================================================
@@ -250,12 +256,12 @@ function attachListeners(){
     actors = snap.docs.map(d=>({id:d.id,...d.data()}));
     dataReady = true;
     render();
-  }, err=>console.error(err));
+  }, err=>{ console.error(err); dataReady=true; loadError = friendlyError(err); render(); });
   db.collection(COLL_REVIEWS).onSnapshot(snap=>{
     reviews = snap.docs.map(d=>({id:d.id,...d.data()}));
     dataReady = true;
     render();
-  }, err=>console.error(err));
+  }, err=>{ console.error(err); dataReady=true; loadError = friendlyError(err); render(); });
 }
 
 /* ============================================================
@@ -450,6 +456,7 @@ function filterPanel(){
    HOME PAGE
    ============================================================ */
 function homePage(){
+  if(loadError) return `<div class="banner" style="margin-top:30px;white-space:pre-line;">${esc(loadError)}</div>`;
   if(!dataReady) return loadingBlock();
   const list = filteredSortedReviews();
   const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
@@ -573,7 +580,6 @@ function reviewPage(id){
   <div class="detail-review">
     <div>
       <div class="detail-img"><img src="${esc(r.imageUrl)}" alt="${esc(r.title)}" onerror="this.style.opacity=0.2"></div>
-      ${r.videoUrl ? `<div class="detail-video"><iframe src="${esc(r.videoUrl)}" allowfullscreen></iframe></div>` : ''}
     </div>
     <div>
       <h1 class="detail-title">${esc(r.title)}</h1>
@@ -680,8 +686,6 @@ function reviewForm(){
     <input type="text" name="title" required placeholder="Tên video">
     <label>URL ảnh (nhúng)</label>
     <input type="url" name="imageUrl" required placeholder="https://…">
-    <label>URL video nhúng (không bắt buộc)</label>
-    <input type="url" name="videoUrl" placeholder="https://…/embed/…">
     <label>Diễn viên trong video</label>
     <div class="actor-pick">
       ${actors.length ? actors.map(a=>`<span class="pick-chip ${draftActorIds.includes(a.id)?'active':''}" data-actor="${a.id}">${esc(a.name)}</span>`).join('') : '<span class="hint">Chưa có diễn viên nào — hãy thêm ở tab "Diễn viên" trước.</span>'}
@@ -815,16 +819,16 @@ function onActorSubmit(e){
   if(!name || !avatarUrl) return;
   db.collection(COLL_ACTORS).add({name, avatarUrl, createdAt: firebase.firestore.FieldValue.serverTimestamp()})
     .then(()=>{ e.target.reset(); alert('Đã lưu diễn viên.'); })
-    .catch(err=>alert('Lỗi: '+err.message));
+    .catch(err=>alert(friendlyError(err)));
 }
 
 function onReviewSubmit(e){
   e.preventDefault();
   const fd = new FormData(e.target);
-  const title = fd.get('title').trim(), imageUrl = fd.get('imageUrl').trim(), videoUrl = (fd.get('videoUrl')||'').trim();
+  const title = fd.get('title').trim(), imageUrl = fd.get('imageUrl').trim();
   if(!title || !imageUrl) return;
   db.collection(COLL_REVIEWS).add({
-    title, imageUrl, videoUrl,
+    title, imageUrl,
     actorIds: draftActorIds.slice(),
     scores: {...draftScores},
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -834,7 +838,7 @@ function onReviewSubmit(e){
     CRITERIA.forEach(c=>draftScores[c]=50);
     alert('Đã lưu đánh giá.');
     render();
-  }).catch(err=>alert('Lỗi: '+err.message));
+  }).catch(err=>alert(friendlyError(err)));
 }
 
 function onSettingsSubmit(e){
